@@ -178,7 +178,7 @@ function descargar(blob, nombre) {
 
 /* ---------- vistas ---------- */
 const FOOT = '<footer>Desarrollado por Mgter. Diego Ortiz — Líder de Mejora Continua | Consultor ISO</footer>';
-function shell(html) { $("#app").innerHTML = html; window.scrollTo(0, 0); }
+function shell(html) { document.body.classList.toggle("wide", VIEW === "hallazgos" && !CUR); $("#app").innerHTML = html; window.scrollTo(0, 0); }
 function logout() { CLAVE = ""; lsSet("a20_clave", ""); renderLogin("La clave no es válida. Ingresala de nuevo."); }
 
 function renderLogin(msg) {
@@ -198,12 +198,12 @@ async function start() { syncBadge(); flushAll(); renderPrograma(); }
 function topbar() {
   const anios = [ANIO - 1, ANIO, ANIO + 1].filter((v, i, s) => s.indexOf(v) === i);
   return `<div class="toolbar">
-    <div class="tabs"><button type="button" data-v="programa" aria-pressed="${VIEW === "programa"}">Programa</button><button type="button" data-v="tablero" aria-pressed="${VIEW === "tablero"}">Tablero histórico</button></div>
+    <div class="tabs"><button type="button" data-v="programa" aria-pressed="${VIEW === "programa"}">Programa</button><button type="button" data-v="hallazgos" aria-pressed="${VIEW === "hallazgos"}">Hallazgos</button><button type="button" data-v="tablero" aria-pressed="${VIEW === "tablero"}">Tablero histórico</button></div>
     ${VIEW === "programa" ? `<label class="f" style="flex-direction:row;align-items:center;gap:8px">Año <select id="selAnio">${anios.map(y => `<option ${y === ANIO ? "selected" : ""}>${y}</option>`).join("")}</select></label>` : ""}
   </div>`;
 }
 function bindTop() {
-  $$("[data-v]").forEach(b => b.onclick = () => { VIEW = b.dataset.v; VIEW === "programa" ? renderPrograma() : renderTablero(); });
+  $$("[data-v]").forEach(b => b.onclick = () => { VIEW = b.dataset.v; ({ programa: renderPrograma, hallazgos: renderHallazgos, tablero: renderTablero })[VIEW](); });
   const s = $("#selAnio"); if (s) s.onchange = () => { ANIO = +s.value; lsSet("a20_anio", ANIO); renderPrograma(); };
 }
 
@@ -288,7 +288,7 @@ function renderAudit(keep) {
       <textarea id="f_resumen" rows="10" placeholder="Tocá “Armar borrador”">${esc(a.resumen)}</textarea>
       <div class="actions"><button class="btn" id="btnDraft">Armar borrador</button></div></div>
     <h2>Control antes de emitir</h2><div class="warns" id="warnBox"></div>
-    <div class="actions"><button class="btn primary" id="btnEmit">Emitir y descargar A.20</button><button class="btn" id="btnDocx">Solo descargar Word</button><span class="msg" id="docMsg"></span></div>${FOOT}`);
+    <div class="actions"><button class="btn primary" id="btnEmit">Emitir y descargar A.20</button><button class="btn" id="btnPrev">Vista previa</button><button class="btn" id="btnDocx">Solo descargar Word</button><span class="msg" id="docMsg"></span></div>${FOOT}`);
   $("#btnBack").onclick = () => { flushAll(); renderPrograma(); };
   const field = (sel, col, conv) => $(sel).addEventListener("input", e => { const v = conv ? conv(e.target.value) : e.target.value; a[col] = v; queue(fkey, "PATCH", "/api/auditorias/" + id, { [col]: v || null }, true); refresh(); });
   field("#f_fecha_pedido", "fecha_pedido"); field("#f_mes", "fecha_programada", mesTxt); field("#f_fecha_auditoria", "fecha_auditoria");
@@ -310,6 +310,7 @@ function renderAudit(keep) {
   $$("[data-pev]").forEach(t => t.addEventListener("input", () => { const h = A.prev.find(x => x.id === +t.dataset.pev); h.seg_evidencia = t.value; saveSeg(h); refresh(); }));
   $$("[data-sv]").forEach(b => b.onclick = async () => { const k = b.dataset.sv; clearTimeout(timers[k]); if (!PEND[k]) { itemMsg(k, "Ya estaba guardado", "ok"); return; } await send(k); });
   $("#btnDraft").onclick = () => { a.resumen = draft(A); $("#f_resumen").value = a.resumen; queue(fkey, "PATCH", "/api/auditorias/" + id, { resumen: a.resumen }, true); refresh(); };
+  $("#btnPrev").onclick = () => vistaPrevia(A);
   $("#btnDocx").onclick = async () => {
     const m = $("#docMsg"); try { await flushAll(); descargar(makeDocx(A), nombreDoc(a)); m.textContent = "Descargado."; } catch (e) { m.textContent = "No se pudo generar: " + e.message; }
   };
@@ -327,6 +328,22 @@ function renderAudit(keep) {
   refresh(); window.scrollTo(0, keep ? sy : 0);
 }
 const procNombre = a => ({ MANT: "Mantenimiento", RMP: "Recepción de MP", COMP: "Compras", CC: "Control de Calidad", VRP: "Ventas · Recepción de pedidos", PROD: "Producción", VLA: "Ventas · Logística y Almacén", CAL: "Calibraciones", PROV: "Proveedores", RRHH: "Recursos Humanos", SGC: "Administración del SGC", AI: "Auditorías internas", RD: "Revisión por la dirección" }[a.proceso] || a.proceso);
+async function vistaPrevia(A) {
+  const ov = document.createElement("div"); ov.className = "ovl";
+  ov.innerHTML = `<div class="ovl-box" role="dialog" aria-modal="true" aria-label="Vista previa del A.20">
+    <div class="ovl-bar"><b>Vista previa · ${esc(nombreDoc(A.aud))}</b><span style="flex:1"></span><button class="btn" id="ovDl">Descargar</button><button class="btn" id="ovX">Cerrar</button></div>
+    <div class="ovl-doc" id="ovDoc"><p class="msg">Armando el documento…</p></div></div>`;
+  document.body.appendChild(ov); document.body.style.overflow = "hidden";
+  const close = () => { ov.remove(); document.body.style.overflow = ""; };
+  ov.addEventListener("click", e => { if (e.target === ov) close(); }); $("#ovX", ov).onclick = close;
+  document.addEventListener("keydown", function k(e) { if (e.key === "Escape") { close(); document.removeEventListener("keydown", k); } });
+  try {
+    const blob = makeDocx(A); $("#ovDl", ov).onclick = () => descargar(blob, nombreDoc(A.aud));
+    if (!window.docx || !window.docx.renderAsync) throw new Error("No cargó el visor. Recargá la página.");
+    const box = $("#ovDoc", ov); box.innerHTML = "";
+    await window.docx.renderAsync(blob, box, null, { inWrapper: true, ignoreLastRenderedPageBreak: true, breakPages: true });
+  } catch (e) { $("#ovDoc", ov).innerHTML = `<div class="warn">No se pudo mostrar: ${esc(e.message)}</div>`; }
+}
 const nombreDoc = a => a.anio + " A.20 Informe Auditoria N" + a.nro + " " + procNombre(a).replace(/[·\/]/g, "-") + ".docx";
 
 function refresh() {
@@ -348,6 +365,92 @@ function refresh() {
     catch (e) { i.style.borderColor = "var(--nc)"; alert(e.message); }
   }));
   const w = checks(A); $("#warnBox").innerHTML = w.length ? w.map(x => `<div class="warn">${esc(x)}</div>`).join("") : `<div class="hint">Todo en orden para emitir.</div>`;
+}
+
+
+/* ---------- dashboard de hallazgos ---------- */
+const HS = { tipos: new Set(["NC", "HA", "OM"]), aud: "todos", est: "todos", sel: null };
+const ORDEN_T = ["NC", "OM", "HA"];
+let tipEl = null;
+function tipShow(e, html) { if (!tipEl) { tipEl = document.createElement("div"); tipEl.className = "tip"; document.body.appendChild(tipEl); } tipEl.innerHTML = html; tipEl.style.display = "block"; tipEl.style.left = Math.min(e.clientX + 12, innerWidth - 270) + "px"; tipEl.style.top = (e.clientY + 12) + "px"; }
+function tipHide() { if (tipEl) tipEl.style.display = "none"; }
+const cssv = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+async function renderHallazgos() {
+  VIEW = "hallazgos"; CUR = null; shell(topbar() + `<p class="msg">Cargando hallazgos…</p>`); bindTop();
+  let d; try { d = await api("GET", "/api/hallazgos"); } catch (e) { if (e.status === 401) return logout(); shell(topbar() + `<div class="warn">${esc(e.message)}</div>`); bindTop(); return; }
+  const P = d.procesos, YEARS = [...new Set(d.auditorias.map(a => a.anio))].sort((a, b) => a - b);
+  const audited = {}; d.auditorias.forEach(a => { (audited[a.anio] = audited[a.anio] || new Set()).add(a.proceso); });
+  const yN = YEARS[YEARS.length - 1], yP = YEARS[YEARS.length - 2];
+  if (!HS.sel || !P.find(p => p.codigo === HS.sel)) HS.sel = P[0].codigo;
+  shell(topbar() + `<h1>Hallazgos por auditoría</h1>
+    <p class="sub">Qué se encontró en cada proceso, de qué tipo y cómo evoluciona año contra año. Tocá un proceso para ver el detalle. Sirve de entrada para la revisión por la dirección (9.3).</p>
+    <div class="filters" role="group" aria-label="Filtros">
+      <div class="fg"><span>Tipo</span>${["NC", "HA", "OM"].map(t => `<button class="tg" data-t="${t}" aria-pressed="${HS.tipos.has(t)}"><i class="sw" style="background:var(--t${t.toLowerCase()})"></i>${t}</button>`).join("")}</div>
+      <div class="fg"><span>Auditor</span>${[["todos", "Todos"], ["interno", "Interno"], ["externo", "Externo"]].map(([k, l]) => `<button class="tg" data-a="${k}" aria-pressed="${HS.aud === k}">${l}</button>`).join("")}</div>
+      <div class="fg"><span>Estado</span>${[["todos", "Todos"], ["abiertos", "Solo abiertos"]].map(([k, l]) => `<button class="tg" data-e="${k}" aria-pressed="${HS.est === k}">${l}</button>`).join("")}</div>
+    </div>
+    <div class="kpis" id="hk"></div>
+    <div class="grid2">
+      <div class="panel"><h2>Evolución por año</h2>
+        <div class="legend">${ORDEN_T.map(t => `<span><i style="background:var(--t${t.toLowerCase()})"></i>${t}</span>`).join("")}</div>
+        <svg id="hevo" viewBox="0 0 420 260" width="100%" role="img" aria-label="Hallazgos por año apilados por tipo"></svg>
+        <details class="tbl"><summary>Ver como tabla</summary><div id="hevoT"></div></details></div>
+      <div class="panel"><h2>Por proceso y año</h2><div style="overflow-x:auto"><table class="mx" id="hmx"></table></div>
+        <p class="note">Barra = hallazgos del año (rojo NC, azul OM, amarillo HA). Flecha = cambio contra el año anterior.</p></div>
+    </div>
+    <div class="panel det" id="hdet" style="margin-top:14px"></div>${FOOT}`);
+  bindTop();
+  const procOK = p => HS.aud === "todos" || p.auditor_tipo === HS.aud;
+  const rows = () => d.hallazgos.filter(h => HS.tipos.has(h.tipo) && procOK(P.find(p => p.codigo === h.proceso)) && (HS.est === "todos" || h.estado !== "cerrado"));
+  const cnt = (L, y, pc) => { const c = { NC: 0, HA: 0, OM: 0 }; L.forEach(h => { if (h.anio === y && (!pc || h.proceso === pc)) c[h.tipo]++; }); c.t = c.NC + c.HA + c.OM; return c; };
+  const bindTips = root => $$("[data-tip]", root).forEach(el => { el.addEventListener("mousemove", e => tipShow(e, esc(el.dataset.tip))); el.addEventListener("mouseleave", tipHide); });
+  function draw() {
+    const L = rows();
+    // indicadores
+    const a = cnt(L, yN), b = yP ? cnt(L, yP) : null;
+    const dif = (x, y) => { if (y == null) return ""; const v = x - y; return v === 0 ? `<span class="trend flat">= ${yP}</span>` : `<span class="trend ${v > 0 ? "up" : "down"}">${v > 0 ? "▲ +" : "▼ "}${v} vs ${yP}</span>`; };
+    const prevAll = yP ? d.hallazgos.filter(h => h.anio === yP) : [], cer = prevAll.filter(h => h.estado === "cerrado").length;
+    $("#hk").innerHTML = `<div class="kpi"><span>Hallazgos ${yN}</span><b>${a.t}</b>${b ? dif(a.t, b.t) : ""}</div>` +
+      ORDEN_T.map(k => `<div class="kpi"><span><i class="sw" style="background:var(--t${k.toLowerCase()})"></i>${k} ${yN}</span><b>${a[k]}</b>${b ? dif(a[k], b[k]) : ""}</div>`).join("") +
+      (prevAll.length ? `<div class="kpi"><span>Eficacia del ciclo ${yP}</span><b>${Math.round(cer / prevAll.length * 100)}%</b><small>${cer} de ${prevAll.length} cerrados y eficaces</small></div>` : "") +
+      `<div class="kpi"><span>Abiertos acumulados</span><b>${d.hallazgos.filter(h => h.estado !== "cerrado").length}</b><small>de todos los ciclos</small></div>`;
+    // evolución
+    const W = 420, H = 260, m = { l: 34, r: 12, t: 18, b: 30 }, ih = H - m.t - m.b;
+    const tot = YEARS.map(y => cnt(L, y)); const mx = Math.max(4, ...tot.map(c => c.t)); const st = mx <= 8 ? 2 : mx <= 25 ? 5 : 10; const top = Math.ceil(mx / st) * st;
+    const sy = v => m.t + ih - (v / top) * ih; const gap = (W - m.l - m.r) / YEARS.length, bw = Math.min(64, gap * 0.6);
+    let s = ""; for (let v = 0; v <= top; v += st) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${sy(v)}" y2="${sy(v)}" stroke="${cssv("--line")}" stroke-opacity=".6"/><text x="${m.l - 6}" y="${sy(v) + 4}" font-size="11" text-anchor="end" fill="${cssv("--muted")}">${v}</text>`;
+    YEARS.forEach((y, i) => {
+      const c = tot[i], x = m.l + gap * i + (gap - bw) / 2; let acc = 0; const segs = ORDEN_T.filter(k => c[k]);
+      segs.forEach((k, j) => { const h = (c[k] / top) * ih, yy = sy(acc + c[k]), last = j === segs.length - 1, hh = Math.max(0, h - (last ? 0 : 2)), col = cssv("--t" + k.toLowerCase());
+        if (last) s += `<rect x="${x}" y="${yy}" width="${bw}" height="${Math.min(hh, 8)}" rx="4" fill="${col}"/><rect x="${x}" y="${yy + Math.min(4, hh / 2)}" width="${bw}" height="${Math.max(0, hh - Math.min(4, hh / 2))}" fill="${col}"/>`;
+        else s += `<rect x="${x}" y="${yy}" width="${bw}" height="${hh}" fill="${col}"/>`; acc += c[k]; });
+      s += `<text x="${x + bw / 2}" y="${sy(c.t) - 6}" font-size="13" font-weight="600" text-anchor="middle" fill="${cssv("--ink")}">${c.t}</text><text x="${x + bw / 2}" y="${H - 10}" font-size="12" text-anchor="middle" fill="${cssv("--muted")}">${y}</text>`;
+      s += `<rect x="${x - 10}" y="${m.t}" width="${bw + 20}" height="${ih}" fill="transparent" data-tip="${y}: ${c.t} hallazgos · NC ${c.NC} · OM ${c.OM} · HA ${c.HA}"/>`;
+    });
+    $("#hevo").innerHTML = s; bindTips($("#hevo"));
+    $("#hevoT").innerHTML = `<table class="mx"><tr><th>Año</th><th>NC</th><th>HA</th><th>OM</th><th>Total</th></tr>${YEARS.map((y, i) => `<tr><td>${y}</td><td>${tot[i].NC}</td><td>${tot[i].HA}</td><td>${tot[i].OM}</td><td>${tot[i].t}</td></tr>`).join("")}</table>`;
+    // matriz
+    const maxT = Math.max(1, ...P.flatMap(p => YEARS.map(y => cnt(L, y, p.codigo).t))), U = 86 / maxT;
+    const cell = (p, y) => { if (!audited[y] || !audited[y].has(p.codigo)) return `<td class="dash">sin auditar</td>`; const c = cnt(L, y, p.codigo);
+      if (!c.t) return `<td><div class="cellbar"><span class="cnt">0</span><span class="dash">sin hallazgos</span></div></td>`;
+      return `<td data-tip="${esc(p.nombre)} ${y}: NC ${c.NC} · OM ${c.OM} · HA ${c.HA}"><div class="cellbar"><span class="cnt">${c.t}</span><span class="mini">${ORDEN_T.filter(k => c[k]).map(k => `<i style="width:${c[k] * U}px;background:var(--t${k.toLowerCase()})"></i>`).join("")}</span></div></td>`; };
+    const trend = p => { if (!yP || !audited[yN] || !audited[yN].has(p.codigo) || !audited[yP] || !audited[yP].has(p.codigo)) return `<td class="dash">—</td>`; const x = cnt(L, yN, p.codigo).t, z = cnt(L, yP, p.codigo).t; return `<td>${x > z ? `<span class="trend up">▲ ${x - z}</span>` : x < z ? `<span class="trend down">▼ ${z - x}</span>` : `<span class="trend flat">=</span>`}</td>`; };
+    $("#hmx").innerHTML = `<thead><tr><th>Proceso</th>${YEARS.map(y => `<th>${y}</th>`).join("")}<th>Tend.</th></tr></thead><tbody>` +
+      P.filter(procOK).map(p => `<tr class="row ${p.codigo === HS.sel ? "sel" : ""}" tabindex="0" data-p="${p.codigo}"><td class="p">${esc(p.nombre)}${p.auditor_tipo === "externo" ? ' <span class="extl">· externa</span>' : ""}</td>${YEARS.map(y => cell(p, y)).join("")}${trend(p)}</tr>`).join("") + `</tbody>`;
+    bindTips($("#hmx"));
+    $$("#hmx tr.row").forEach(r => { const go = () => { HS.sel = r.dataset.p; draw(); }; r.onclick = go; r.onkeydown = e => { if (e.key === "Enter") go(); }; });
+    // detalle
+    const p = P.find(x => x.codigo === HS.sel), E = { cerrado: "Cerrado y eficaz", abierto: "Abierto", no_eficaz: "No eficaz" };
+    let h = `<h3>${esc(p.nombre)}</h3><p class="sub" style="margin:0">${p.auditor_tipo === "externo" ? "Auditoría externa" : "Auditoría interna"} · hallazgos por año y estado de cierre</p>`;
+    [...YEARS].reverse().forEach(y => { const l = L.filter(x => x.proceso === p.codigo && x.anio === y);
+      h += `<div class="yr">${y} · ${l.length} ${l.length === 1 ? "hallazgo" : "hallazgos"}</div>`;
+      h += l.length ? l.map(x => `<div class="fr"><span class="chip ${x.tipo} solid">${x.tipo}</span><span>${esc(x.texto)}${x.nc_numero ? ` <span class="tag">NC/OM ${x.nc_numero}</span>` : ""}</span><span class="est ${x.estado}">${E[x.estado]}</span></div>`).join("") : `<p class="note">${audited[y] && audited[y].has(p.codigo) ? "Sin hallazgos con los filtros elegidos." : "No auditado ese año."}</p>`; });
+    $("#hdet").innerHTML = h;
+  }
+  $$("[data-t]").forEach(b => b.onclick = () => { const t = b.dataset.t; if (HS.tipos.has(t) && HS.tipos.size > 1) HS.tipos.delete(t); else HS.tipos.add(t); b.setAttribute("aria-pressed", HS.tipos.has(t)); draw(); });
+  const grp = (attr, key) => $$(`[data-${attr}]`).forEach(b => b.onclick = () => { HS[key] = b.dataset[attr]; $$(`[data-${attr}]`).forEach(x => x.setAttribute("aria-pressed", x === b)); if (key === "aud" && !procOK(P.find(x => x.codigo === HS.sel))) HS.sel = P.find(procOK).codigo; draw(); });
+  grp("a", "aud"); grp("e", "est");
+  draw();
 }
 
 async function renderTablero() {
